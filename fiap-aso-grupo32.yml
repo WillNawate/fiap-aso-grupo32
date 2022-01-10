@@ -1,0 +1,319 @@
+kind: List
+apiVersion: v1
+items:
+- kind: ProjectRequest
+  apiVersion: project.openshift.io/v1
+  description: 'Entrega do grupo 32'
+  displayName: 'Grupo 32'
+  metadata:
+    name: fiap-aso-grupo32
+- kind: ImageStream
+  apiVersion: image.openshift.io/v1
+  metadata:
+    name: blog-django
+    namespace: fiap-aso-grupo32
+- kind: BuildConfig
+  apiVersion: build.openshift.io/v1
+  metadata:
+    name: blog-django
+    namespace: fiap-aso-grupo32
+  spec:
+    nodeSelector: null
+    source:
+      type: Git
+      git:
+        uri: 'https://github.com/openshift-katacoda/blog-django-py.git'
+      contextDir: /
+    strategy:
+      type: Source
+      sourceStrategy:
+        from:
+          kind: ImageStreamTag
+          namespace: openshift
+          name: python:latest
+    output:
+      to:
+        kind: ImageStreamTag
+        name: blog-django:latest
+    resources: {}
+    postCommit: {}
+    successfulBuildsHistoryLimit: 5
+    failedBuildsHistoryLimit: 5
+    triggers:
+    - type: ConfigChange
+- kind: PersistentVolumeClaim
+  apiVersion: v1
+  metadata:
+    name: blog-images
+    namespace: fiap-aso-grupo32
+  spec:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 1Gi
+    storageClassName: standard
+    volumeMode: Filesystem
+- kind: PersistentVolumeClaim
+  apiVersion: v1
+  metadata:
+    name: blog-database
+    namespace: fiap-aso-grupo32
+  spec:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 1Gi
+    storageClassName: standard
+    volumeMode: Filesystem
+- kind: ConfigMap
+  apiVersion: v1
+  metadata:
+    name: blog-settings
+    namespace: fiap-aso-grupo32
+  data:
+    blog.json: |
+      {
+        "BLOG_SITE_NAME": "FIAP - ASO - Grupo 32",
+        "BLOG_BANNER_COLOR": "purple"
+      }
+- kind: Secret
+  apiVersion: v1
+  metadata:
+    name: blog-database
+    namespace: fiap-aso-grupo32
+  stringData:
+    database-name: sampledb
+    database-password: sampledb
+    database-user: sampledb
+  type: Opaque
+- kind: Secret
+  apiVersion: v1
+  metadata:
+    name: blog-database-url
+    namespace: fiap-aso-grupo32
+  stringData:
+    database-url: postgresql://sampledb:sampledb@blog-database:5432/sampledb
+  type: Opaque
+- kind: DeploymentConfig
+  apiVersion: apps.openshift.io/v1
+  metadata:
+    name: blog-django
+    namespace: fiap-aso-grupo32
+    labels:
+      app.kubernetes.io/name: python
+      app.kubernetes.io/part-of: blog-grupo32-app
+  spec:
+    replicas: 1
+    revisionHistoryLimit: 10
+    strategy:
+      type: Recreate
+      activeDeadlineSeconds: 21600
+      recreateParams:
+        timeoutSeconds: 600
+      resources: {}
+    selector:
+      deploymentconfig: blog-django
+    template:
+      metadata:
+        labels:
+          app: blog-django
+          deploymentconfig: blog-django
+      spec:
+        restartPolicy: Always
+        terminationGracePeriodSeconds: 30
+        containers:
+        - name: blog-django
+          image: blog-django:latest
+          imagePullPolicy: Always
+          env:
+          - name: DATABASE_URL
+            valueFrom:
+              secretKeyRef:
+                key: database-url
+                name: blog-database-url
+          ports:
+          - containerPort: 8080
+            protocol: TCP
+          resources: {}
+          volumeMounts:
+          - mountPath: /opt/app-root/src/media
+            name: blog-images
+          - mountPath: /opt/app-root/src/settings
+            name: settings
+        securityContext: {}
+        volumes:
+        - name: blog-images
+          persistentVolumeClaim:
+            claimName: blog-images
+        - configMap:
+            name: blog-settings
+          name: settings
+    test: false
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - blog-django
+        from:
+          kind: ImageStreamTag
+          name: blog-django:latest
+          namespace: fiap-aso-grupo32
+      type: ImageChange
+    - type: ConfigChange
+- kind: DeploymentConfig
+  apiVersion: apps.openshift.io/v1
+  metadata:
+    name: blog-database
+    namespace: fiap-aso-grupo32
+    labels:
+      app.kubernetes.io/name: postgresql
+      app.kubernetes.io/part-of: blog-grupo32-app
+  spec:
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      name: blog-database
+    strategy:
+      activeDeadlineSeconds: 21600
+      recreateParams:
+        timeoutSeconds: 600
+      resources: {}
+      type: Recreate
+    template:
+      metadata:
+        labels:
+          app: blog-database
+          name: blog-database
+      spec:
+        restartPolicy: Always
+        terminationGracePeriodSeconds: 30
+        containers:
+        - name: postgresql
+          image: postgresql:latest
+          imagePullPolicy: IfNotPresent
+          env:
+          - name: POSTGRESQL_USER
+            valueFrom:
+              secretKeyRef:
+                key: database-user
+                name: blog-database
+          - name: POSTGRESQL_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: blog-database
+          - name: POSTGRESQL_DATABASE
+            valueFrom:
+              secretKeyRef:
+                key: database-name
+                name: blog-database
+          ports:
+          - containerPort: 5432
+            protocol: TCP
+          livenessProbe:
+            exec:
+              command:
+              - /usr/libexec/check-container
+              - --live
+            failureThreshold: 3
+            initialDelaySeconds: 120
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+              - /usr/libexec/check-container
+            failureThreshold: 3
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+          resources:
+            limits:
+              memory: 512Mi
+          securityContext:
+            capabilities: {}
+            privileged: false
+          volumeMounts:
+          - mountPath: /var/lib/pgsql/data
+            name: blog-database-data
+        securityContext: {}
+        volumes:
+        - name: blog-database-data
+          persistentVolumeClaim:
+            claimName: blog-database
+    test: false
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - postgresql
+        from:
+          kind: ImageStreamTag
+          name: postgresql:latest
+          namespace: openshift
+      type: ImageChange
+    - type: ConfigChange
+- kind: Service
+  apiVersion: v1
+  metadata:
+    name: blog-django
+    namespace: fiap-aso-grupo32
+  spec:
+    ports:
+    - name: 8080-tcp
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
+    selector:
+      deploymentconfig: blog-django
+    type: ClusterIP
+- kind: Service
+  apiVersion: v1
+  metadata:
+    name: blog-database
+    namespace: fiap-aso-grupo32
+  spec:
+    ports:
+    - name: postgresql
+      port: 5432
+      protocol: TCP
+      targetPort: 5432
+    selector:
+      name: blog-database
+    type: ClusterIP
+- kind: Route
+  apiVersion: route.openshift.io/v1
+  metadata:
+    name: blog-django
+    namespace: fiap-aso-grupo32
+  spec:
+    port:
+      targetPort: 8080-tcp
+    to:
+      kind: Service
+      name: blog-django
+      weight: 100
+- kind: HorizontalPodAutoscaler
+  apiVersion: autoscaling/v2beta2
+  metadata:
+    name: hpa-blog
+    namespace: fiap-aso-grupo32
+  spec:
+    scaleTargetRef:
+      kind: DeploymentConfig
+      name: blog-django
+      apiVersion: apps.openshift.io/v1
+    minReplicas: 1
+    maxReplicas: 3
+    metrics:
+      - type: Resource
+        resource:
+          name: cpu
+          target:
+            type: Utilization
+            averageUtilization: 20
+metadata: {}
